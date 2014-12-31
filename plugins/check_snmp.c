@@ -91,6 +91,7 @@ char *thisarg (char *str);
 char *nextarg (char *str);
 void print_usage (void);
 void print_help (void);
+double perform_math(char, double, double);
 
 #include "regex.h"
 char regex_expect[MAX_INPUT_BUFFER] = "";
@@ -116,16 +117,20 @@ char **oids = NULL;
 size_t oids_size = 0;
 char *label;
 char *units;
+char *math_functions; /* bheden */
 char *port;
 char *snmpcmd;
 char string_value[MAX_INPUT_BUFFER] = "";
 int  invert_search=0;
 char **labels = NULL;
 char **unitv = NULL;
+char **math_function = NULL; /* bheden */
 size_t nlabels = 0;
 size_t labels_size = OID_COUNT_STEP;
 size_t nunits = 0;
 size_t unitv_size = OID_COUNT_STEP;
+size_t num_math_functions = 0;
+size_t math_function_size = OID_COUNT_STEP; /* bheden */
 int numoids = 0;
 int numauthpriv = 0;
 int verbose = 0;
@@ -186,6 +191,7 @@ main (int argc, char **argv)
 	char *cl_hidden_auth = NULL;
 	char *oidname = NULL;
 	char *response = NULL;
+	char *math = NULL; /* bheden */
 	char *mult_resp = NULL;
 	char *outbuff;
 	char *ptr = NULL;
@@ -210,6 +216,7 @@ main (int argc, char **argv)
 	bindtextdomain (PACKAGE, LOCALEDIR);
 	textdomain (PACKAGE);
 
+	math_function = malloc (math_function_size * sizeof(*math_function)); /* bheden */
 	labels = malloc (labels_size * sizeof(*labels));
 	unitv = malloc (unitv_size * sizeof(*unitv));
 	thlds = malloc (thlds_size * sizeof(*thlds));
@@ -329,7 +336,7 @@ main (int argc, char **argv)
 	command_line[10 + numauthpriv + 1 + numoids] = NULL;
 
 	if (verbose)
-		printf ("%s\n", cl_hidden_auth);
+		printf ("%s\n\n\n", cl_hidden_auth);
 
 	/* Set signal handling and alarm */
 	if (signal (SIGALRM, runcmd_timeout_alarm_handler) == SIG_ERR) {
@@ -459,6 +466,23 @@ main (int argc, char **argv)
 			show = response + 3;
 
 		iresult = STATE_DEPENDENT;
+		
+		/* bheden */
+		/* Process this block to perform math operations */
+		if ((num_math_functions >= (size_t)1 && (size_t)i < num_math_functions && math_function[i] != NULL) &&
+			(strstr(math_function[i], "*") == 0 || strstr(math_function[i], "/") == 0) && /* must have either * or / (at the beginning) AND : to even be considered valid */
+			(strstr(math_function[i], ":")) &&
+			(strstr (response, "INTEGER: "))) { /* must be integer type to do maths */
+			
+			char *rhs = ( char * )malloc( (strlen(math_function[i] + 1) - strlen(strstr(math_function[i], ":")) + 1) * sizeof(char));
+			char *precision = ( char * )malloc( (strlen(strstr(math_function[i], ":") + 1) + 1) * sizeof(char));
+			memset(rhs, '\0', sizeof(rhs));
+			memset(precision, '\0', sizeof(precision));
+			strncpy(rhs, math_function[i] + 1, (size_t)strlen(math_function[i] + 1) - strlen(strstr(math_function[i], ":") + 1) - 1 );
+			strncpy(precision, strstr(math_function[i], ":") + 1, (size_t)strlen(strstr(math_function[i], ":") + 1));
+			/* printf("\n\nTEST TEST TEST\n operand: %c\n lhs: %s\n rhs: %s\n precision: %s\n RESULT: %.*f\n\n", math_function[i][0], show, rhs, precision, atoi(precision), perform_math(math_function[i][0], (double)atoi(show), (double)atoi(rhs))); */
+			sprintf(show, "%.*f", atoi(precision), perform_math(math_function[i][0], (double)atoi(show), (double)atoi(rhs)));
+		}
 
 		/* Process this block for numeric comparisons */
 		/* Make some special values,like Timeticks numeric only if a threshold is defined */
@@ -681,6 +705,7 @@ process_arguments (int argc, char **argv)
 		{"offset", required_argument, 0, L_OFFSET},
 		{"invert-search", no_argument, 0, L_INVERT_SEARCH},
 		{"perf-oids", no_argument, 0, 'O'},
+		{"math-function", no_argument, 0, 'M'}, /* bheden */
 		{0, 0, 0, 0}
 	};
 
@@ -698,7 +723,7 @@ process_arguments (int argc, char **argv)
 	}
 
 	while (1) {
-		c = getopt_long (argc, argv, "nhvVOt:c:w:H:C:o:e:E:d:D:s:t:R:r:l:u:p:m:P:L:U:a:x:A:X:",
+		c = getopt_long (argc, argv, "nhvVOt:c:w:H:C:o:e:E:d:D:s:t:R:r:l:u:p:m:P:L:U:a:x:A:X:M:", /* bheden */
 									 longopts, &option);
 
 		if (c == -1 || c == EOF)
@@ -900,6 +925,35 @@ process_arguments (int argc, char **argv)
 					unitv[nunits - 1] = ptr + 1;
 				else
 					unitv[nunits - 1] = ptr;
+			}
+			break;
+		case 'M':		/* math functions, bheden */
+			math_functions = optarg;
+			num_math_functions++;
+			if (num_math_functions > math_function_size) {
+				math_function_size += 8;
+				math_function = realloc (math_function, math_function_size * sizeof(*math_function));
+				if (math_function == NULL)
+					die (STATE_UNKNOWN, _("Could not reallocate math_functions [%d]\n"), (int)num_math_functions);
+			}
+			math_function[num_math_functions - 1] = optarg;
+			ptr = thisarg (optarg);
+			math_function[num_math_functions - 1] = ptr;
+			if (ptr[0] == '\'')
+				math_function[num_math_functions - 1] = ptr + 1;
+			while (ptr && (ptr = nextarg (ptr))) {
+				if (num_math_functions > math_function_size) {
+					math_function_size += 8;
+					math_function = realloc (math_function, math_function_size * sizeof(*math_function));
+					if (math_functions == NULL)
+						die (STATE_UNKNOWN, _("Could not realloc() math_functions\n"));
+				}
+				num_math_functions++;
+				ptr = thisarg (ptr);
+				if (ptr[0] == '\'')
+					math_function[num_math_functions - 1] = ptr + 1;
+				else
+					math_function[num_math_functions - 1] = ptr;
 			}
 			break;
 		case L_CALCULATE_RATE:
@@ -1184,6 +1238,8 @@ print_help (void)
 	printf ("    %s\n", _("Units label(s) for output data (e.g., 'sec.')."));
 	printf (" %s\n", "-D, --output-delimiter=STRING");
 	printf ("    %s\n", _("Separates output on multiple OID requests"));
+	printf (" %s\n", "-M, --math-function=STRING"); /* bheden */
+	printf ("    %s\n", _("Performs division or multiplication on numeric data and returns to specified decimal point. (e.g., '/1024:2', '*10:4')."));
 
 	printf (UT_CONN_TIMEOUT, DEFAULT_SOCKET_TIMEOUT);
 	printf (" %s\n", "-e, --retries=INTEGER");
@@ -1225,7 +1281,6 @@ print_help (void)
 }
 
 
-
 void
 print_usage (void)
 {
@@ -1234,5 +1289,17 @@ print_usage (void)
 	printf ("[-C community] [-s string] [-r regex] [-R regexi] [-t timeout] [-e retries]\n");
 	printf ("[-l label] [-u units] [-p port-number] [-d delimiter] [-D output-delimiter]\n");
 	printf ("[-m miblist] [-P snmp version] [-L seclevel] [-U secname] [-a authproto]\n");
-	printf ("[-A authpasswd] [-x privproto] [-X privpasswd]\n");
+	printf ("[-A authpasswd] [-x privproto] [-X privpasswd] [-M math-function]\n"); /* bheden */
+}
+
+/* bheden */
+/* only accounts for divide and multiply :/ */
+double
+perform_math (char operand, double lhs, double rhs)
+{
+	if (operand == '/') {
+		return (double)lhs / (double)rhs;
+	} else if (operand == '*') {
+		return (double)lhs * (double)rhs;
+	}
 }
